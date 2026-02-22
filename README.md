@@ -136,7 +136,6 @@ class Main {
 | **StaticFiles** | Serves static files from a directory under a configurable URL prefix |
 | **CORS** | Cross-Origin Resource Sharing with preflight handling, origin whitelists, regex/function matchers, and credentials support |
 | **CSRF** | Double Submit Cookie pattern with HMAC-SHA256 token generation and validation |
-| **CORS** | CORS (Cross-Origin Resource Sharing) |
 | **FormBody** | Parses `application/x-www-form-urlencoded` request bodies with URL decoding |
 | **Multipart** | Full `multipart/form-data` boundary parser for file uploads with configurable size limits |
 | **OAuth2** | Authorization Code flow with PKCE (S256); preset configs for GitHub, Google, Facebook, Discord |
