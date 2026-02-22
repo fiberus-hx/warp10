@@ -30,7 +30,7 @@ Inspired by **Go Fiber** (for its elegant, zero-async API) and **Fastify** (for 
 ---
 > [!WARNING]
 > Fibers can move across threads! Pay attention dont write the same mutable data from multiple fibers/threads!
----
+
 > [!IMPORTANT]
 > fiberus is currently Linux-only! Other platforms will follow eventually
 
@@ -212,9 +212,7 @@ final app = new Warp10({
 - Structured JSON logging
 
 ### Roadmap
-- [x] CORS plugin
 - [ ] WebSocket support
-- [ ] HTTP/2
 - [ ] Request body streaming
 - [ ] Rate limiting plugin
 - [ ] Session management plugin
