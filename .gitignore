@@ -1,0 +1,41 @@
+# Compiled object files
+*.o
+*.obj
+
+# Compiler dependency files
+*.d
+
+# Static and shared libraries
+*.a
+*.so
+*.dylib
+
+# Build hash files
+*.hash
+
+# Compiled Haxe bytecode
+*.n
+
+# Build directories
+project/obj/
+**/obj/
+**/bin/
+
+# Generated C source files
+**/bin/src/
+
+# Compiled binaries (in test directories)
+test/**/bin/[A-Z]*
+!test/**/bin/*.xml
+!test/**/bin/*.hxml
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
