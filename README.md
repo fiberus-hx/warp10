@@ -27,18 +27,15 @@ Inspired by **Go Fiber** (for its elegant, zero-async API) and **Fastify** (for 
 - **11 built-in plugins** -- CORS, compression, cookies, CSRF, form parsing, multipart uploads, OAuth2, SSE, Swagger/SwaggerUI, and static files
 - **Structured logging** -- Pino-inspired JSON logger with child bindings and monotonic timestamps
 
----
-> [!WARNING]
-> Fibers can move across threads! Pay attention dont write the same mutable data from multiple fibers/threads!
 
-> [!IMPORTANT]
-> fiberus is currently Linux-only! Other platforms will follow eventually
 
 ## Prerequisites
 
 - **[Fiberus](https://github.com/fiberus-hx/fiberus)** runtime (custom Haxe target compiling to C)
 - **[Haxe](https://github.com/fiberus-hx/haxe/tree/fiberus)** custom compiler branch that includes fiberus' codegen
 - **Linux** with io_uring support (kernel 5.1+)
+> [!IMPORTANT]
+> fiberus is currently Linux-only! Other platforms will follow eventually
 
 ## Quick Start
 
@@ -182,6 +179,10 @@ The server spawns multiple accept threads using `SO_REUSEPORT` for kernel-level 
 
 Hooks are **scoped**: routes registered inside a `register()` block carry exactly the hooks that were active in that scope at registration time, matching Fastify's encapsulation model.
 
+> [!WARNING]
+> Fibers can move across threads! Pay attention dont write the same mutable data from multiple fibers/threads!
+
+
 ## Configuration
 
 Pass a `ServerConfig` to the `Warp10` constructor:
@@ -200,8 +201,8 @@ final app = new Warp10({
 ```
 
 ## Status
-
-**Alpha** -- core framework, router, plugin system, and all listed plugins are implemented and functional. The API surface may change before a stable release.
+> [!CAUTION]
+> This is **alpha** software. Core framework, router, plugin system, and all listed plugins are implemented and functional. The API surface may change before a stable release.
 
 ### What works today
 - Multi-threaded HTTP/1.1 server with fiber-per-connection
