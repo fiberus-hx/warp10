@@ -1,5 +1,5 @@
 
-![Alt text](./assets/header_wide.png "a title")
+![Alt text](./assets/header_wide.png "Warp10")
 
 ---
 > [!CAUTION]
@@ -124,9 +124,10 @@ class Main {
 
 | Plugin | Description |
 |---|---|
-| **Compress** | Response compression (deflate) with configurable threshold and compression level |
-| **CORS** | Cross-Origin Resource Sharing with preflight handling, origin whitelists, regex/function matchers, and credentials support |
 | **Cookie** | Parses `Cookie` headers; provides `get()`, `set()`, `clear()` helpers with all standard cookie attributes |
+| **Compress** | Response compression (deflate) with configurable threshold and compression level |
+| **StaticFiles** | Serves static files from a directory under a configurable URL prefix |
+| **CORS** | Cross-Origin Resource Sharing with preflight handling, origin whitelists, regex/function matchers, and credentials support |
 | **CSRF** | Double Submit Cookie pattern with HMAC-SHA256 token generation and validation |
 | **CORS** | CORS (Cross-Origin Resource Sharing) |
 | **FormBody** | Parses `application/x-www-form-urlencoded` request bodies with URL decoding |
@@ -135,7 +136,6 @@ class Main {
 | **SSE** | Server-Sent Events streaming with managed `stream()` API, background heartbeat fibers, and connection state detection |
 | **Swagger** | OpenAPI 3.0.3 spec generator; auto-discovers routes and merges schemas from `describe()` |
 | **SwaggerUI** | Serves an interactive Swagger UI documentation page |
-| **StaticFiles** | Serves static files from a directory under a configurable URL prefix |
 
 Plugins are applied via `register()` (encapsulated scope) or `use()` (flat, current scope):
 
@@ -208,8 +208,10 @@ final app = new Warp10({
 - Radix-trie router with typed compile-time parameter extraction
 - Plugin/hook system with Fastify-style encapsulation
 - All 11 built-in plugins (Compress, CORS, Cookie, CSRF, FormBody, Multipart, OAuth2, SSE, Swagger, SwaggerUI, StaticFiles)
-- OpenAPI 3.0.3 spec generation with Swagger UI
 - Structured JSON logging
+- OpenAPI 3.0.3 spec generation with Swagger UI
+![Alt text](./assets/openapi.webp "Warp10")
+
 
 ### Roadmap
 - [ ] WebSocket support
