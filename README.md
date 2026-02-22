@@ -37,16 +37,6 @@ Inspired by **Go Fiber** (for its elegant, zero-async API) and **Fastify** (for 
 > [!IMPORTANT]
 > fiberus is currently Linux-only! Other platforms will follow eventually
 
-> [!TIP]
-> To reduce compilation time you can setup a compilation cache via `~/.fiberus_config.xml`, e.g:
-> ```xml
->   <xml>
->       <section id="vars">
->           <set name="FIBERUS_COMPILE_CACHE" value="/home/<your user>/.fiberus-compile-cache" />
->       </section>
->   </xml>
-> ```
-
 ## Quick Start
 
 ```hxml
@@ -126,6 +116,16 @@ class Main {
     }
 }
 ```
+
+> [!TIP]
+> To reduce compilation time you can setup a compilation cache via `~/.fiberus_config.xml`, e.g:
+> ```xml
+>   <xml>
+>       <section id="vars">
+>           <set name="FIBERUS_COMPILE_CACHE" value="/home/<your user>/.fiberus-compile-cache" />
+>       </section>
+>   </xml>
+> ```
 
 ## Plugins
 
