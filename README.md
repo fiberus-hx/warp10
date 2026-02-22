@@ -236,7 +236,3 @@ final app = new Warp10({
 - [ ] Benchmarks and performance documentation
 - [ ] CI/CD pipeline
 
-## Contributing
-
-Warp10 is part of the Fiberus ecosystem. Contributions welcome!
-Check out the [Fiberus repo](https://github.com/fiberus-hx/fiberus) for the runtime and GC work that powers it.
