@@ -225,6 +225,8 @@ final app = new Warp10({
 
 
 ### Roadmap
+- [ ] SQLite support
+- [ ] Postgres support
 - [ ] WebSocket support
 - [ ] Request body streaming
 - [ ] Rate limiting plugin
