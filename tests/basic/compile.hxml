@@ -1,0 +1,6 @@
+-D multithreaded
+-D iouring
+--fiberus bin
+-cp ../../src
+-main Main
+-dce full
