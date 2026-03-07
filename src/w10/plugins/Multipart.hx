@@ -27,7 +27,7 @@ import w10.utils.Http;
  *             for (part in parts) {
  *                 if (part.filename != null) {
  *                     // file upload: part.data contains the bytes
- *                     ctx.log.info("uploaded file", {
+ *                     ctx.info("uploaded file", {
  *                         name: part.filename,
  *                         size: part.data.length,
  *                         type: part.contentType

@@ -203,58 +203,63 @@ class Server {
 			// --- 3. Route lookup ---
 			var match = router.find(req.method, req.path);
 
-			if (match != null) {
-				var entry = match.entry;
+			try {
+				if (match != null) {
+					var entry = match.entry;
 
-				// --- 4a. Populate route params ---
-				for (key in match.params.keys()) {
-					req.params.set(key, match.params.get(key));
-				}
+					// --- 4a. Populate route params ---
+					for (key in match.params.keys()) {
+						req.params.set(key, match.params.get(key));
+					}
 
-				// Rebind the request logger with route params
-				if (ctx.log != null) {
-					ctx.log = ctx.log.childWithMap({}, req.params);
-				}
+					// Rebind the request logger with route params
+					if (@:privateAccess ctx.log != null) {
+						@:privateAccess ctx.log = @:privateAccess ctx.log.childWithMap({}, req.params);
+					}
 
-				// --- 4b. Run OnRequest hooks (from route's scope) ---
-				runHooks(entry.onRequestHooks, ctx);
+					// --- 4b. Run OnRequest hooks (from route's scope) ---
+					runHooks(entry.onRequestHooks, ctx);
 
-				// --- 4c. Run PreHandler hooks ---
-				if (!res.sent) {
-					runHooks(entry.preHandlerHooks, ctx);
-				}
+					// --- 4c. Run PreHandler hooks ---
+					if (!res.sent) {
+						runHooks(entry.preHandlerHooks, ctx);
+					}
 
-				// --- 4d. Call route handler ---
-				if (!res.sent) {
-					try {
-						entry.handler(ctx);
-					} catch (e:Dynamic) {
-						handlerError = e;
-						if (!res.sent) {
-							sendError(clientFd, HttpStatus.INTERNAL_SERVER_ERROR, keepAlive);
+					// --- 4d. Call route handler ---
+					if (!res.sent) {
+						try {
+							entry.handler(ctx);
+						} catch (e:Dynamic) {
+							handlerError = e;
+							if (!res.sent) {
+								sendError(clientFd, HttpStatus.INTERNAL_SERVER_ERROR, keepAlive);
+							}
 						}
 					}
-				}
 
-				// --- 4e. Ensure response sent ---
-				if (!res.sent) {
-					res.sendEmpty();
-				}
+					// --- 4e. Ensure response sent ---
+					if (!res.sent) {
+						res.sendEmpty();
+					}
 
-				// --- 4f. Run OnResponse hooks (always) ---
-				runHooks(entry.onResponseHooks, ctx);
-			} else {
-				// --- 5. No route matched -- 404 ---
-				sendError(clientFd, HttpStatus.NOT_FOUND, keepAlive);
+					// --- 4f. Run OnResponse hooks (always) ---
+					runHooks(entry.onResponseHooks, ctx);
+				} else {
+					// --- 5. No route matched -- 404 ---
+					sendError(clientFd, HttpStatus.NOT_FOUND, keepAlive);
+				}
+			} catch (_e) {
+				// --- 6. Error -- 500 ---
+				sendError(clientFd, HttpStatus.INTERNAL_SERVER_ERROR, keepAlive);
 			}
 
 			// --- 6. Internal request logging ---
-			if (ctx.log != null) {
+			if (@:privateAccess ctx.log != null) {
 				var dur = Math.round((w10.utils.Logger.nowMs() - startTime) * 1000) / 1000;
 				if (handlerError != null) {
-					ctx.log.error("request error", {statusCode: res.statusCode, responseTime: dur, err: Std.string(handlerError)});
+					@:privateAccess ctx.log.error("request error", {statusCode: res.statusCode, responseTime: dur, err: Std.string(handlerError)});
 				} else {
-					ctx.log.info("request completed", {statusCode: res.statusCode, responseTime: dur});
+					@:privateAccess ctx.log.info("request completed", {statusCode: res.statusCode, responseTime: dur});
 				}
 			}
 

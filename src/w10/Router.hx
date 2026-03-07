@@ -206,14 +206,10 @@ private class RouterNode {
 
 	/** Map HttpMethod enum to array index */
 	static inline function methodIndex(m:HttpMethod):Int {
-		return switch (m) {
-			case Get: 0;
-			case Post: 1;
-			case Put: 2;
-			case Delete: 3;
-			case Patch: 4;
-			case Head: 5;
-			case Options: 6;
-		};
+		var idx = Type.enumIndex(m);
+		if (idx < 0 || idx >= METHOD_COUNT) {
+			return 0;
+		}
+		return idx;
 	}
 }

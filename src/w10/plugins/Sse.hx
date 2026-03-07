@@ -279,10 +279,7 @@ class Sse {
 				return send(ctx, msg);
 			});
 		} catch (e:Dynamic) {
-			// Stream callback error -- log if logger available
-			if (ctx.log != null) {
-				ctx.log.error("SSE stream error", {err: Std.string(e)});
-			}
+			ctx.error("SSE stream error", {err: Std.string(e)});
 		}
 
 		close(ctx);

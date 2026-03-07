@@ -30,7 +30,7 @@ class Context {
 	public var res:Response;
 
 	/** Per-request child logger with method/url bindings. Null when logging is disabled. */
-	public var log:Null<w10.utils.Logger>;
+	private var log:Null<w10.utils.Logger>;
 
 	/** Per-request key-value store for plugins to share data across hooks/handlers. */
 	public var store:Map<String, Dynamic>;
@@ -132,5 +132,41 @@ class Context {
 	/** Get a request header value (case-insensitive) */
 	public function getHeader(name:String):Null<String> {
 		return req.getHeader(name);
+	}
+
+	/** Log at TRACE level (10) */
+	public inline function trace(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.trace(msg, data);
+	}
+
+	/** Log at DEBUG level (20) */
+	public inline function debug(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.debug(msg, data);
+	}
+
+	/** Log at INFO level (30) */
+	public inline function info(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.info(msg, data);
+	}
+
+	/** Log at WARN level (40) */
+	public inline function warn(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.warn(msg, data);
+	}
+
+	/** Log at ERROR level (50) */
+	public inline function error(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.error(msg, data);
+	}
+
+	/** Log at FATAL level (60) */
+	public inline function fatal(msg:String, ?data:Dynamic):Void {
+		if (log != null)
+			log.fatal(msg, data);
 	}
 }

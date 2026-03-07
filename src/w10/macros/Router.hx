@@ -13,18 +13,30 @@ using haxe.macro.TypeTools;
  *
  * Inspects handler function signatures and generates wrapper code that
  * automatically extracts route parameters and query parameters from the
- * request with proper type conversion.
+ * request with proper type conversion and validation.
  *
  * Parameters that match `:param` segments in the route path are extracted
  * from `ctx.params` (route parameters). Any remaining parameters are
  * extracted from `ctx.query` (query string parameters).
  *
+ * Non-nullable parameters (String, Int, Float, Bool) are required: if
+ * missing or unparseable, the generated wrapper responds with 400 Bad
+ * Request and the handler is not called. Nullable parameters (Null<T>)
+ * gracefully return null when missing.
+ *
  * Supports both inline lambdas and function references:
  *
- *     // Route param + query param
+ *     // Required route param + required query param
  *     app.get("/hello/:name", (ctx: Context, name: String, greeting: String) -> {
  *         // name comes from route :name, greeting comes from ?greeting=...
+ *         // Both are required -- 400 if missing
  *         ctx.text('$greeting $name!');
+ *     });
+ *
+ *     // Optional query param
+ *     app.get("/search", (ctx: Context, q: String, page: Null<Int>) -> {
+ *         // q is required (400 if missing), page is optional (null if missing)
+ *         ctx.json({query: q, page: page});
  *     });
  *
  *     // Function reference
@@ -347,16 +359,28 @@ class Router {
 
 	/**
 	 * Generate a wrapper lambda `(ctx: Context) -> Void` that extracts
-	 * route and query parameters, converts types, and calls the user's handler.
+	 * route and query parameters, converts types, validates required
+	 * parameters, and calls the user's handler.
+	 *
+	 * Non-nullable parameters (String, Int, Float, Bool) are validated:
+	 * if missing or unparseable, the wrapper sends a 400 Bad Request
+	 * response and returns without calling the handler.
+	 *
+	 * Nullable parameters (Null<T>) gracefully return null when missing
+	 * and attempt conversion when present.
 	 */
 	private static function generateWrapper(params:Array<ParamInfo>, handlerExpr:Expr):Expr {
 		var stmts:Array<Expr> = [];
 
-		// Generate extraction + conversion for each param
+		// Generate extraction + conversion + validation for each param
 		var callArgs:Array<Expr> = [macro ctx]; // first arg is always ctx
 
 		for (p in params) {
 			var paramName = p.name;
+			var sourceLabel = switch (p.source) {
+				case SRoute: "route";
+				case SQuery: "query";
+			};
 
 			// Pick the source: ctx.params for route params, ctx.query for query params
 			var rawExpr = switch (p.source) {
@@ -364,20 +388,11 @@ class Router {
 				case SQuery: macro ctx.query.get($v{paramName});
 			};
 
-			var convertedExpr = generateConversion(rawExpr, p.type, paramName);
-
-			// var <paramName> = <convertedExpr>;
-			stmts.push({
-				expr: EVars([
-					{
-						name: paramName,
-						type: null,
-						expr: convertedExpr,
-						isFinal: true,
-					}
-				]),
-				pos: handlerExpr.pos,
-			});
+			// Generate validated extraction statements
+			var paramStmts = generateValidatedParam(rawExpr, p.type, paramName, sourceLabel, handlerExpr.pos);
+			for (s in paramStmts) {
+				stmts.push(s);
+			}
 
 			callArgs.push(macro $i{paramName});
 		}
@@ -525,40 +540,184 @@ class Router {
 	}
 
 	// =========================================================================
-	// Type conversion generation
+	// Validated parameter generation
 	// =========================================================================
 
 	/**
-	 * Generate a type conversion expression for a raw string param value.
+	 * Generate validated extraction statements for a single parameter.
+	 *
+	 * For non-nullable types, generates null/parse checks that send
+	 * 400 Bad Request and return if validation fails:
+	 *
+	 *     var _raw_userId = ctx.params.get("userId");
+	 *     if (_raw_userId == null) { ctx.status(400).json({error: "..."}); return; }
+	 *     var userId = Std.parseInt(_raw_userId);
+	 *     if (userId == null) { ctx.status(400).json({error: "..."}); return; }
+	 *
+	 * For nullable types, generates graceful null handling (no 400):
+	 *
+	 *     var _raw_limit = ctx.query.get("limit");
+	 *     var limit = if (_raw_limit != null) Std.parseInt(_raw_limit) else null;
+	 *
+	 * Returns an array of statements to insert into the wrapper body.
 	 */
-	private static function generateConversion(rawExpr:Expr, paramType:ParamType, paramName:String):Expr {
+	private static function generateValidatedParam(rawExpr:Expr, paramType:ParamType, paramName:String,
+			sourceLabel:String, pos:Position):Array<Expr> {
 		return switch (paramType) {
+			case PNullable(inner):
+				generateNullableParam(rawExpr, inner, paramName, pos);
+
+			default:
+				generateRequiredParam(rawExpr, paramType, paramName, sourceLabel, pos);
+		};
+	}
+
+	/**
+	 * Generate validation statements for a required (non-nullable) parameter.
+	 *
+	 * Missing or unparseable values cause a 400 response and early return.
+	 */
+	private static function generateRequiredParam(rawExpr:Expr, paramType:ParamType, paramName:String,
+			sourceLabel:String, pos:Position):Array<Expr> {
+		var stmts:Array<Expr> = [];
+		var rawName = '_raw_$paramName';
+		var rawIdent = macro $i{rawName};
+
+		// var _raw_<name> = ctx.params.get("<name>");
+		stmts.push({
+			expr: EVars([{name: rawName, type: null, expr: rawExpr}]),
+			pos: pos,
+		});
+
+		// Null check: parameter must be present
+		var missingMsg = 'Missing required $sourceLabel parameter: $paramName';
+		stmts.push(macro {
+			if ($rawIdent == null) {
+				ctx.status(400).json({error: $v{missingMsg}});
+				return;
+			}
+		});
+
+		switch (paramType) {
 			case PString:
-				rawExpr;
+				// String: raw value is already the right type after null check
+				stmts.push({
+					expr: EVars([{name: paramName, type: null, expr: rawIdent, isFinal: true}]),
+					pos: pos,
+				});
 
 			case PInt:
-				macro Std.parseInt($rawExpr);
+				// Int: parse and validate
+				var parsedName = '_parsed_$paramName';
+				var parsedIdent = macro $i{parsedName};
+				var invalidMsg = 'Invalid integer for $sourceLabel parameter: $paramName';
+
+				stmts.push({
+					expr: EVars([{name: parsedName, type: null, expr: macro Std.parseInt($rawIdent)}]),
+					pos: pos,
+				});
+				stmts.push(macro {
+					if ($parsedIdent == null) {
+						ctx.status(400).json({error: $v{invalidMsg}});
+						return;
+					}
+				});
+				stmts.push({
+					expr: EVars([{name: paramName, type: null, expr: parsedIdent, isFinal: true}]),
+					pos: pos,
+				});
 
 			case PFloat:
-				macro Std.parseFloat($rawExpr);
+				// Float: parse and validate (NaN check)
+				var parsedName = '_parsed_$paramName';
+				var parsedIdent = macro $i{parsedName};
+				var invalidMsg = 'Invalid number for $sourceLabel parameter: $paramName';
+
+				stmts.push({
+					expr: EVars([{name: parsedName, type: null, expr: macro Std.parseFloat($rawIdent)}]),
+					pos: pos,
+				});
+				stmts.push(macro {
+					if (Math.isNaN($parsedIdent)) {
+						ctx.status(400).json({error: $v{invalidMsg}});
+						return;
+					}
+				});
+				stmts.push({
+					expr: EVars([{name: paramName, type: null, expr: parsedIdent, isFinal: true}]),
+					pos: pos,
+				});
 
 			case PBool:
-				macro($rawExpr == "true");
+				// Bool: raw value must be present (already null-checked above)
+				// Accept "true"/"false"/"1"/"0", reject anything else
+				var invalidMsg = 'Invalid boolean for $sourceLabel parameter: $paramName (expected "true" or "false")';
 
-			case PNullable(inner):
-				// Unique temp var per param to avoid collisions
-				var tmpName = '_pv_$paramName';
-				var tmpIdent = macro $i{tmpName};
-				var innerConv = generateConversion(tmpIdent, inner, paramName);
-				var varDecl:Expr = {
-					expr: EVars([{name: tmpName, type: null, expr: rawExpr}]),
-					pos: rawExpr.pos,
-				};
-				macro {
-					$varDecl;
-					if ($tmpIdent != null) $innerConv; else null;
-				};
+				stmts.push(macro {
+					if ($rawIdent != "true" && $rawIdent != "false" && $rawIdent != "1" && $rawIdent != "0") {
+						ctx.status(400).json({error: $v{invalidMsg}});
+						return;
+					}
+				});
+				stmts.push({
+					expr: EVars([{
+						name: paramName,
+						type: null,
+						expr: macro($rawIdent == "true" || $rawIdent == "1"),
+						isFinal: true,
+					}]),
+					pos: pos,
+				});
+
+			case PNullable(_):
+				// Should not reach here -- handled by generateValidatedParam
+		}
+
+		return stmts;
+	}
+
+	/**
+	 * Generate statements for a nullable (Null<T>) parameter.
+	 *
+	 * Missing values gracefully become null. Present values are converted
+	 * with best-effort (invalid conversions still produce null, matching
+	 * the Null<T> contract).
+	 */
+	private static function generateNullableParam(rawExpr:Expr, innerType:ParamType, paramName:String,
+			pos:Position):Array<Expr> {
+		var stmts:Array<Expr> = [];
+		var rawName = '_raw_$paramName';
+		var rawIdent = macro $i{rawName};
+
+		// var _raw_<name> = ctx.params.get("<name>");
+		stmts.push({
+			expr: EVars([{name: rawName, type: null, expr: rawExpr}]),
+			pos: pos,
+		});
+
+		// Generate the conversion expression for the inner type
+		var innerConv = switch (innerType) {
+			case PString: rawIdent;
+			case PInt: macro Std.parseInt($rawIdent);
+			case PFloat: macro Std.parseFloat($rawIdent);
+			case PBool: macro($rawIdent == "true" || $rawIdent == "1");
+			case PNullable(_): rawIdent; // nested Null<Null<T>> -- degenerate, just pass through
 		};
+
+		// var <name> = if (_raw != null) <conversion> else null;
+		stmts.push({
+			expr: EVars([{
+				name: paramName,
+				type: null,
+				expr: macro {
+					if ($rawIdent != null) $innerConv; else null;
+				},
+				isFinal: true,
+			}]),
+			pos: pos,
+		});
+
+		return stmts;
 	}
 }
 

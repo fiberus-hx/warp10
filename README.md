@@ -24,7 +24,7 @@ Inspired by **Go Fiber** (for its elegant, zero-async API) and **Fastify** (for 
 - **Compile-time typed parameters** -- handler parameters are extracted from route segments and query strings at compile time via macros, with automatic type conversion and compile-time validation
 - **Plugin system** -- Fastify-style encapsulated scoping (`register`) and flat application (`use`) with three lifecycle hooks: `OnRequest`, `PreHandler`, `OnResponse`
 - **OpenAPI generation** -- route parameter schemas are auto-generated from handler type signatures; enrich with `describe()` for full OpenAPI 3.0.3 specs
-- **11 built-in plugins** -- CORS, compression, cookies, CSRF, form parsing, multipart uploads, OAuth2, SSE, Swagger/SwaggerUI, and static files
+- **13 built-in plugins** -- CORS, compression, cookies, CSRF, form parsing, htmx, multipart uploads, OAuth2, SSE, Swagger/SwaggerUI, static files, and view engine
 - **Structured logging** -- Pino-inspired JSON logger with child bindings and monotonic timestamps
 
 
@@ -139,9 +139,11 @@ class Main {
 | **FormBody** | Parses `application/x-www-form-urlencoded` request bodies with URL decoding |
 | **Multipart** | Full `multipart/form-data` boundary parser for file uploads with configurable size limits |
 | **OAuth2** | Authorization Code flow with PKCE (S256); preset configs for GitHub, Google, Facebook, Discord |
+| **Htmx** | htmx request detection (`HX-Request`, `HX-Target`, etc.) and response headers (`HX-Push-Url`, `HX-Trigger`, `HX-Reswap`, etc.) with optional pre-parsed header caching |
 | **SSE** | Server-Sent Events streaming with managed `stream()` API, background heartbeat fibers, and connection state detection |
 | **Swagger** | OpenAPI 3.0.3 spec generator; auto-discovers routes and merges schemas from `describe()` |
 | **SwaggerUI** | Serves an interactive Swagger UI documentation page |
+| **ViewEngine** | File-based template rendering via `haxe.Template` with pre-loading, layout support, and dev mode |
 
 Plugins are applied via `register()` (encapsulated scope) or `use()` (flat, current scope):
 
@@ -217,7 +219,7 @@ final app = new Warp10({
 - Multi-threaded HTTP/1.1 server with fiber-per-connection
 - Radix-trie router with typed compile-time parameter extraction
 - Plugin/hook system with Fastify-style encapsulation
-- All 11 built-in plugins (Compress, CORS, Cookie, CSRF, FormBody, Multipart, OAuth2, SSE, Swagger, SwaggerUI, StaticFiles)
+- All 13 built-in plugins (Compress, CORS, Cookie, CSRF, FormBody, Htmx, Multipart, OAuth2, SSE, Swagger, SwaggerUI, StaticFiles, ViewEngine)
 - Structured JSON logging
 - OpenAPI 3.0.3 spec generation with Swagger UI
 ![Alt text](./assets/openapi.webp "Warp10")

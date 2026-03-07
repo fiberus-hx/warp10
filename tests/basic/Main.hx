@@ -56,7 +56,11 @@ class Main {
         }));
 
         // Static file plugin -- serves files from ./public under /static/
-        final publicDir = sys.FileSystem.fullPath("public");
+        final publicDir = if (sys.FileSystem.exists("public")) {
+            sys.FileSystem.fullPath("public");
+        } else {
+            sys.FileSystem.fullPath("../public");
+        }
         app.register(StaticFiles.create({root: publicDir, prefix: "/static"}));
 
         // Simple text response
@@ -64,15 +68,15 @@ class Main {
 
         // Route with typed parameter (macro extracts `name` from ctx.params)
         app.get("/hello/:name", (ctx:Context, name:String) -> {
-            ctx.log.info("greeting user", {name: name});
+            ctx.info("greeting user", {name: name});
             ctx.text('Hello $name!');
         });
 
         // JSON response
         app.get("/json", ctx -> ctx.json({message: "ok", count: 42}));
 
-        // Multiple typed params (Int conversion is automatic)
-        app.get("/users/:userId/posts/:postId", (ctx:Context, userId:Int, postId:Int) -> {
+        // Multiple typed params (Int conversion is automatic, null is allowed and indicated by Null<T>)
+        app.get("/users/:userId/posts/:postId", (ctx:Context, userId:Int, postId:Null<Int>) -> {
             ctx.json({userId: userId, postId: postId});
         });
 
