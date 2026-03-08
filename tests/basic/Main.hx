@@ -75,7 +75,7 @@ class Main {
         // JSON response
         app.get("/json", ctx -> ctx.json({message: "ok", count: 42}));
 
-        // Multiple typed params (Int conversion is automatic, null is allowed and indicated by Null<T>)
+        // Multiple typed params (Int conversion is automatic, null can be allowed and indicated by Null<T>)
         app.get("/users/:userId/posts/:postId", (ctx:Context, userId:Int, postId:Null<Int>) -> {
             ctx.json({userId: userId, postId: postId});
         });

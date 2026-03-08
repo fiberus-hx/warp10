@@ -1,5 +1,6 @@
 package w10.plugins;
 
+import haxe.atomic.AtomicBool;
 import haxe.io.Bytes;
 import fiberus.io.FD;
 import fiberus.io.OpenFlags;
@@ -14,6 +15,14 @@ import w10.Context;
  * SSE events from route handlers. Uses Warp10's fiber-per-connection
  * model -- the handler fiber blocks while streaming, and a background
  * heartbeat fiber keeps the connection alive through proxies.
+ *
+ * Thread safety:
+ *
+ *   The handler fiber and the heartbeat fiber may run on different OS
+ *   threads (heartbeat is spawned via Fiber.spawnAny). All shared state
+ *   between the two fibers uses AtomicBool for synchronization. The
+ *   close() method waits for the heartbeat fiber to exit before
+ *   returning, ensuring the fd is not used after Server.hx closes it.
  *
  * SSE wire format (WHATWG spec):
  *   - `data:` lines carry the event payload (multiple lines joined with \n)
@@ -58,11 +67,21 @@ import w10.Context;
  *     curl -N http://localhost:8080/events
  */
 class Sse {
-	/** Store key for the SSE "closed" flag */
-	static inline var CLOSED_KEY = "_sse_closed";
+	/** Store key for the SSE state (SseState reference) */
+	static inline var STATE_KEY = "_sse_state";
 
 	/** Default heartbeat interval in milliseconds */
 	static inline var DEFAULT_HEARTBEAT_MS = 15000;
+
+	/**
+	 * Granularity for heartbeat sleep.
+	 *
+	 * The heartbeat fiber sleeps in chunks of this duration,
+	 * checking the closed flag between chunks. This bounds
+	 * the maximum time close() has to wait for the heartbeat
+	 * to notice the shutdown signal.
+	 */
+	static inline var HEARTBEAT_POLL_MS = 500;
 
 	// =========================================================================
 	// Core API
@@ -96,8 +115,16 @@ class Sse {
 		// Send headers (no Content-Length, no body)
 		ctx.res.sendHeaders();
 
-		// Initialize closed flag
-		ctx.store.set(CLOSED_KEY, false);
+		// Create shared state with atomic flags for thread-safe
+		// communication between handler fiber and heartbeat fiber.
+		// This is stored in ctx.store ONCE here (before the heartbeat
+		// is spawned), then only read out of the store -- never written
+		// back. All subsequent state changes go through the AtomicBools.
+		var state:SseState = {
+			closed: new AtomicBool(false),
+			heartbeatExited: new AtomicBool(true), // true = no heartbeat running
+		};
+		ctx.store.set(STATE_KEY, state);
 
 		// Spawn heartbeat fiber
 		var heartbeatMs = DEFAULT_HEARTBEAT_MS;
@@ -106,7 +133,8 @@ class Sse {
 		}
 
 		if (heartbeatMs > 0) {
-			spawnHeartbeat(ctx, heartbeatMs);
+			state.heartbeatExited.store(false);
+			spawnHeartbeat(ctx.res.fd, state, heartbeatMs);
 		}
 	}
 
@@ -192,15 +220,17 @@ class Sse {
 	 * Check if the client is still connected.
 	 *
 	 * Performs a non-blocking poll on the socket to detect POLLERR/POLLHUP
-	 * (client disconnect). Also checks the internal closed flag.
+	 * (client disconnect). Also checks the atomic closed flag.
 	 *
 	 * @param ctx  The request context
 	 * @return true if the client is still connected
 	 */
 	public static function isConnected(ctx:Context):Bool {
-		// Check closed flag
-		var closed:Dynamic = ctx.store.get(CLOSED_KEY);
-		if (closed == true) return false;
+		var state = getState(ctx);
+		if (state == null) return false;
+
+		// Check closed flag (atomic)
+		if (state.closed.load()) return false;
 
 		// Non-blocking poll for disconnect events
 		var pollResult = FD.poll(ctx.res.fd, OpenFlags.POLLERR | OpenFlags.POLLHUP, 0);
@@ -208,7 +238,7 @@ class Sse {
 		// pollResult > 0 means events were detected (error/hangup)
 		if (pollResult > 0) {
 			if ((pollResult & OpenFlags.POLLERR) != 0 || (pollResult & OpenFlags.POLLHUP) != 0) {
-				ctx.store.set(CLOSED_KEY, true);
+				state.closed.store(true);
 				return false;
 			}
 		}
@@ -233,14 +263,31 @@ class Sse {
 	/**
 	 * Close the SSE stream.
 	 *
-	 * Sets the closed flag so the heartbeat fiber stops. The connection
-	 * itself is closed by Server.hx when the handler returns (since
-	 * keepAlive was set to false by start()).
+	 * Sets the closed flag atomically, then waits for the heartbeat
+	 * fiber to exit before returning. This is critical: Server.hx
+	 * closes the fd immediately after the handler returns, so the
+	 * heartbeat must have stopped writing to the fd by that point.
+	 *
+	 * The heartbeat fiber checks the closed flag in HEARTBEAT_POLL_MS
+	 * intervals (500ms), so the maximum wait is one poll interval plus
+	 * the time for any in-flight writeRaw to complete.
 	 *
 	 * @param ctx  The request context
 	 */
 	public static function close(ctx:Context):Void {
-		ctx.store.set(CLOSED_KEY, true);
+		var state = getState(ctx);
+		if (state == null) return;
+
+		// Signal the heartbeat to stop (atomic)
+		state.closed.store(true);
+
+		// Wait for heartbeat fiber to exit.
+		// The heartbeat sleeps in HEARTBEAT_POLL_MS chunks and checks
+		// the closed flag between chunks, so worst case we wait ~500ms
+		// plus any in-flight io_uring send completion.
+		while (!state.heartbeatExited.load()) {
+			Timer.sleep(10);
+		}
 	}
 
 	// =========================================================================
@@ -288,6 +335,19 @@ class Sse {
 	// =========================================================================
 	// Internal helpers
 	// =========================================================================
+
+	/**
+	 * Retrieve the SseState from ctx.store.
+	 *
+	 * The state is stored once by start() and never overwritten. This
+	 * read-only Map access is safe even from the heartbeat fiber because
+	 * no concurrent writes to the Map occur after start() returns.
+	 */
+	static function getState(ctx:Context):Null<SseState> {
+		var s:Dynamic = ctx.store.get(STATE_KEY);
+		if (s == null) return null;
+		return cast s;
+	}
 
 	/**
 	 * Format an SSE message according to the wire protocol.
@@ -339,27 +399,69 @@ class Sse {
 	 * Sends `:` comment lines at the configured interval to keep the
 	 * connection alive through proxies. Stops when the closed flag
 	 * is set or a write fails.
+	 *
+	 * The heartbeat sleeps in small chunks (HEARTBEAT_POLL_MS) and
+	 * checks the closed flag between chunks. This ensures the
+	 * heartbeat exits promptly when close() is called, bounding
+	 * the time close() has to wait.
+	 *
+	 * Takes the fd and state directly (not ctx) to avoid any
+	 * ctx.store access from the heartbeat fiber.
 	 */
-	static function spawnHeartbeat(ctx:Context, intervalMs:Int):Void {
+	static function spawnHeartbeat(fd:Int, state:SseState, intervalMs:Int):Void {
 		Fiber.spawnAny((_) -> {
-			while (true) {
-				Timer.sleep(intervalMs);
+			var heartbeatBytes = Bytes.ofString(":\n\n");
 
-				// Check if stream was closed
-				var closed:Dynamic = ctx.store.get(CLOSED_KEY);
-				if (closed == true) return;
+			while (true) {
+				// Sleep in small chunks, checking closed flag between each
+				var elapsed = 0;
+				while (elapsed < intervalMs) {
+					var chunk = intervalMs - elapsed;
+					if (chunk > HEARTBEAT_POLL_MS) chunk = HEARTBEAT_POLL_MS;
+					Timer.sleep(chunk);
+					elapsed += chunk;
+
+					// Check if stream was closed (atomic)
+					if (state.closed.load()) {
+						state.heartbeatExited.store(true);
+						return;
+					}
+				}
 
 				// Send heartbeat comment
-				var ok = ctx.res.writeRaw(Bytes.ofString(":\n\n"));
+				var ok = FD.send(fd, heartbeatBytes, 0, heartbeatBytes.length, 0) > 0;
 				if (!ok) {
 					// Write failed -- client disconnected
-					ctx.store.set(CLOSED_KEY, true);
+					state.closed.store(true);
+					state.heartbeatExited.store(true);
 					return;
 				}
 			}
 		});
 	}
 }
+
+// =============================================================================
+// Internal types
+// =============================================================================
+
+/**
+ * Shared state between handler fiber and heartbeat fiber.
+ *
+ * All fields are AtomicBool for thread-safe access. This struct
+ * is stored in ctx.store once by start() and only read out (never
+ * written back). All state mutations go through the atomic operations.
+ */
+private typedef SseState = {
+	/** Set to true when the stream should close.
+	 *  Written by close() or heartbeat (on write failure).
+	 *  Read by heartbeat (to know when to stop) and isConnected(). */
+	closed:AtomicBool,
+
+	/** Set to true when the heartbeat fiber has exited.
+	 *  Written by heartbeat (on exit). Read by close() (to wait). */
+	heartbeatExited:AtomicBool,
+};
 
 // =============================================================================
 // Configuration typedefs

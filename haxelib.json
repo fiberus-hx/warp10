@@ -1,0 +1,12 @@
+{
+  "name": "warp10",
+  "url" : "",
+  "license": "MIT",
+  "tags": [],
+  "description": "",
+  "version": "0.0.1",
+  "releasenote": "",
+  "classPath": "src",
+  "contributors": ["daz"],
+  "dependencies": {}
+}

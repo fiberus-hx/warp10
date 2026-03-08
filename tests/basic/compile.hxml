@@ -1,6 +1,6 @@
 -D multithreaded
 -D iouring
 --fiberus bin
--cp ../../src
+-lib warp10 
 -main Main
 -dce full
