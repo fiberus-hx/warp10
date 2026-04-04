@@ -12,7 +12,7 @@ import w10.plugins.Csrf;
 import w10.plugins.OAuth2;
 import w10.plugins.Sse;
 import w10.plugins.Swagger;
-import w10.plugins.SwaggerUi;
+import w10.plugins.SwaggerUI;
 import w10.types.HttpMethod;
 
 class Main {
@@ -51,7 +51,7 @@ class Main {
         }));
 
         // Swagger UI -- interactive API documentation page
-        app.register(SwaggerUi.create({
+        app.register(SwaggerUI.create({
             title: "Warp10 Demo API",
         }));
 

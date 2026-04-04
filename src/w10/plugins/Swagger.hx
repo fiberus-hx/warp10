@@ -287,6 +287,7 @@ class Swagger {
 			Reflect.setField(requestBody, "content", content);
 			Reflect.setField(requestBody, "required", true);
 			Reflect.setField(op, "requestBody", requestBody);
+			// TODO: fix request payloads in describe!
 		}
 
 		// Responses

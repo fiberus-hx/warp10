@@ -22,7 +22,7 @@ import w10.types.HttpMethod;
  *     app.register(Swagger.create({
  *         openapi: { info: { title: "My API", version: "1.0.0" } },
  *     }));
- *     app.register(SwaggerUi.create({
+ *     app.register(SwaggerUI.create({
  *         title: "My API Docs",
  *     }));
  *
@@ -34,20 +34,20 @@ import w10.types.HttpMethod;
  *
  * For the spec endpoint, the Swagger plugin should be registered with its
  * default path ("/docs/openapi.json") or a matching `specUrl` should be
- * provided to SwaggerUi.
+ * provided to SwaggerUI.
  */
-class SwaggerUi {
+class SwaggerUI {
 	/** Default swagger-ui-dist version served from CDN */
 	static inline var DEFAULT_VERSION = "5.31.2";
 
 	/**
-	 * Create a SwaggerUi plugin.
+	 * Create a SwaggerUI plugin.
 	 *
 	 * @param config  Plugin configuration (route prefix, spec URL, title, etc.)
 	 * @return A PluginFn suitable for app.register()
 	 */
-	public static function create(?config:SwaggerUiConfig):PluginFn {
-		var cfg:SwaggerUiConfig = config != null ? config : {};
+	public static function create(?config:SwaggerUIConfig):PluginFn {
+		var cfg:SwaggerUIConfig = config != null ? config : {};
 		var routePrefix = cfg.routePrefix != null ? cfg.routePrefix : "/docs";
 		var specUrl = cfg.specUrl != null ? cfg.specUrl : routePrefix + "/openapi.json";
 		var title = cfg.title != null ? cfg.title : "Swagger UI";
@@ -160,8 +160,8 @@ class SwaggerUi {
 	}
 }
 
-/** Configuration for the SwaggerUi plugin. */
-typedef SwaggerUiConfig = {
+/** Configuration for the SwaggerUI plugin. */
+typedef SwaggerUIConfig = {
 	/**
 	 * Route path to serve the Swagger UI page.
 	 * Default: "/docs"
