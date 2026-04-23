@@ -218,8 +218,11 @@ class Response {
 		var pos = 0;
 		while (pos < data.length) {
 			var n = FD.send(fd, data, pos, data.length - pos, 0);
-			if (n <= 0)
+			if (n <= 0) {
+				Sys.stderr().writeString('[WRITE-RAW] partial write: pos=$pos total=${data.length} n=$n fd=$fd\n');
+				Sys.stderr().flush();
 				return false;
+			}
 			pos += n;
 		}
 		return true;
