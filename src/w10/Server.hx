@@ -25,6 +25,11 @@ import w10.utils.Http;
  * path matching and handler dispatch.
  */
 class Server {
+	// GC Rework 5 Phase 5b: env-gated per-request local collection.
+	// Matches BEAM fullsweep_after:0 + Bandit :erlang.garbage_collect().
+	// Cached once at class-load so getenv isn't called per request.
+	static final perRequestGc:Bool = Sys.getEnv("FIBERUS_PER_REQUEST_GC") == "1";
+
 	var router:Router;
 	var config:ServerConfig;
 	var logger:Null<w10.utils.Logger>;
@@ -273,6 +278,13 @@ class Server {
 			if (!keepAlive) {
 				FD.close(clientFd);
 				return;
+			}
+
+			// Phase 5b: force local collection at keepalive boundary so
+			// per-request objects die before the next poll, preventing
+			// cross-request accumulation in long-lived keepalive fibers.
+			if (perRequestGc) {
+				fiberus.GC.collect();
 			}
 		}
 
