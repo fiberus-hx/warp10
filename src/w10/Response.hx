@@ -139,8 +139,24 @@ class Response {
 	}
 
 	/**
+	 * Threshold above which send() splits the body into bounded writes.
+	 * Each piece becomes a separate FD.send (yielding via io_uring), so
+	 * other fibers can interleave and the kernel write buffer never has
+	 * to hold the entire response at once.
+	 *
+	 * 256 KB is well below typical kernel socket buffer (usually ~4 MB)
+	 * yet large enough that small responses still get a single write.
+	 */
+	public static inline var SPLIT_WRITE_THRESHOLD:Int = 256 * 1024;
+
+	/**
 	 * Send the response with the given body bytes.
-	 * Serializes status line + headers + body and writes to the socket.
+	 *
+	 * For small bodies (<= SPLIT_WRITE_THRESHOLD) the headers + body are
+	 * concatenated and sent in one syscall.  For larger bodies the headers
+	 * go out first, then the body is written in SPLIT_WRITE_THRESHOLD-sized
+	 * pieces — bounds peak kernel-buffer pressure and lets other fibers
+	 * make progress between pieces.
 	 */
 	public function send(body:Bytes):Void {
 		if (sent)
@@ -159,18 +175,26 @@ class Response {
 
 		ensureConnectionHeader();
 
-		// Build the full HTTP response as a single string
-		var resp = buildStatusAndHeaders();
+		var headerBytes = Bytes.ofString(buildStatusAndHeaders());
 
-		// Combine headers and body into a single buffer for one write
-		var headerBytes = Bytes.ofString(resp);
-		var total = headerBytes.length + body.length;
-		var out = Bytes.alloc(total);
-		out.blit(0, headerBytes, 0, headerBytes.length);
-		out.blit(headerBytes.length, body, 0, body.length);
-
-		// Write to socket (fiber-suspending via io_uring)
-		writeRaw(out);
+		if (body.length <= SPLIT_WRITE_THRESHOLD) {
+			// Small body: combine headers and body into a single buffer for
+			// one write.  Avoids an extra syscall on the common path.
+			var out = Bytes.alloc(headerBytes.length + body.length);
+			out.blit(0, headerBytes, 0, headerBytes.length);
+			out.blit(headerBytes.length, body, 0, body.length);
+			writeRaw(out);
+		} else {
+			// Large body: headers first, then body in bounded slices.
+			if (!writeRaw(headerBytes)) return;
+			var pos = 0;
+			while (pos < body.length) {
+				var chunkLen = body.length - pos;
+				if (chunkLen > SPLIT_WRITE_THRESHOLD) chunkLen = SPLIT_WRITE_THRESHOLD;
+				if (!writeRawSlice(body, pos, chunkLen)) return;
+				pos += chunkLen;
+			}
+		}
 	}
 
 	/**
@@ -215,17 +239,104 @@ class Response {
 	 * as each write is a complete logical frame.
 	 */
 	public function writeRaw(data:Bytes):Bool {
-		var pos = 0;
-		while (pos < data.length) {
-			var n = FD.send(fd, data, pos, data.length - pos, 0);
+		return writeRawSlice(data, 0, data.length);
+	}
+
+	/**
+	 * Write a slice of bytes directly to the client socket.
+	 *
+	 * Like writeRaw() but takes an offset+length so callers can stream
+	 * a sub-range without copying.  Loops on partial writes; returns
+	 * false on error or peer disconnect.
+	 */
+	public function writeRawSlice(data:Bytes, offset:Int, length:Int):Bool {
+		var pos = offset;
+		var end = offset + length;
+		while (pos < end) {
+			var n = FD.send(fd, data, pos, end - pos, 0);
 			if (n <= 0) {
-				Sys.stderr().writeString('[WRITE-RAW] partial write: pos=$pos total=${data.length} n=$n fd=$fd\n');
+				Sys.stderr().writeString('[WRITE-RAW] partial write: pos=$pos remaining=${end - pos} n=$n fd=$fd\n');
 				Sys.stderr().flush();
 				return false;
 			}
 			pos += n;
 		}
 		return true;
+	}
+
+	/**
+	 * Begin a Transfer-Encoding: chunked response.
+	 *
+	 * Sends the status line and headers with `Transfer-Encoding: chunked`
+	 * (and no Content-Length).  After this, call writeChunk() for each
+	 * piece of the body and endChunked() to finish.
+	 *
+	 * Use when the body is built incrementally (e.g. from a database
+	 * cursor) so the server doesn't have to materialize the full
+	 * response in memory before any byte is sent.
+	 */
+	public function startChunked(?contentType:String):Bool {
+		if (sent) return false;
+		sent = true;
+		if (contentType != null) setHeader("Content-Type", contentType);
+		setHeader("Transfer-Encoding", "chunked");
+		// Strip Content-Length if any plugin set it — invalid with chunked.
+		var i = 0;
+		while (i < headerCount) {
+			if (headerKeys[i] == "Content-Length") {
+				headerKeys.splice(i, 1);
+				headerValues.splice(i, 1);
+				headerCount--;
+				continue;
+			}
+			i++;
+		}
+		ensureConnectionHeader();
+		return writeRaw(Bytes.ofString(buildStatusAndHeaders()));
+	}
+
+	/**
+	 * Write one HTTP chunk to a chunked-transfer-encoded response.
+	 *
+	 * Format: `<hex-len>\r\n<data>\r\n`.  Empty chunks are a no-op
+	 * (writeChunk(emptyBytes) does NOT terminate the response — use
+	 * endChunked() for that).  Returns false on peer disconnect.
+	 */
+	public function writeChunk(data:Bytes):Bool {
+		if (data == null || data.length == 0) return true;
+		var hex = StringTools.hex(data.length).toLowerCase();
+		if (!writeRaw(Bytes.ofString(hex + "\r\n"))) return false;
+		if (!writeRawSlice(data, 0, data.length)) return false;
+		return writeRaw(Bytes.ofString("\r\n"));
+	}
+
+	/**
+	 * Finish a chunked-transfer-encoded response.  Sends the
+	 * terminating zero-length chunk: `0\r\n\r\n`.
+	 */
+	public function endChunked():Bool {
+		return writeRaw(Bytes.ofString("0\r\n\r\n"));
+	}
+
+	/**
+	 * Convenience: send a chunked response by invoking the producer with
+	 * an emit callback.  Begins with chunked headers, calls producer to
+	 * emit chunks, ends with the terminating zero-chunk.
+	 *
+	 * Example:
+	 *   res.streamBody("application/json", emit -> {
+	 *     emit(Bytes.ofString("["));
+	 *     for (i in 0...rows.length) {
+	 *       if (i > 0) emit(Bytes.ofString(","));
+	 *       emit(Bytes.ofString(serialize(rows[i])));
+	 *     }
+	 *     emit(Bytes.ofString("]"));
+	 *   });
+	 */
+	public function streamBody(?contentType:String, producer:(emit:Bytes->Bool)->Void):Void {
+		if (!startChunked(contentType)) return;
+		producer(function(chunk:Bytes) return writeChunk(chunk));
+		endChunked();
 	}
 
 	/** Set the Connection header based on keep-alive if not already set */
