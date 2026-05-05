@@ -64,6 +64,13 @@ class Server {
 	 * This method blocks the calling fiber (runs the main accept loop).
 	 */
 	public function start(host:String, port:Int, ?onReady:Void->Void):Void {
+		// Step 5 (Option B): the prior deep-promote-deep userspace bandaid was
+		// removed.  Cross-thread Server/Router visibility is now maintained by
+		// Step 4 codegen WBs + Step 4a runtime cross_remset (cy_wb_inline.h).
+		// When worker fibers receive handler closures, the closure-arg stores
+		// (closure.h capN family) feed cross_remset; cy flip drains it; Router
+		// + nested route maps stay BLACK-marked across cycles.
+
 		// Create worker threads (main thread = thread 0, workers = 1..N-1)
 		if (acceptThreads > 1) {
 			Fiber.createWorkers(acceptThreads - 1);
@@ -135,6 +142,7 @@ class Server {
 			var clientFd = acceptResult.fd;
 			var clientIp = acceptResult.host;
 			var clientPort = acceptResult.port;
+			acceptResult = null;  // drop GCFrame slot before spawn — prevents per-accept retention leak (see project_acceptresult_leak memory; 45 GB in 30 min soak)
 
 			Fiber.spawnAny((_) -> handleConnection(clientFd, clientIp, clientPort));
 		}
