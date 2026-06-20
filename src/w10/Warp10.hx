@@ -193,6 +193,20 @@ class Warp10 {
 		}
 		return this;
 	}
+
+	/**
+	 * Set a handler to run when no route matches the request.
+	 *
+	 * Without this, an unmatched request returns a plain 404. With it,
+	 * the Server invokes this handler from the no-match branch instead
+	 * (e.g. the Rewriter plugin serves the SPA shell). Stored on the
+	 * shared Router, so it works when set from inside a register() scope.
+	 */
+	public function setNotFoundHandler(handler:RouteHandler):Warp10 {
+		router.notFoundHandler = handler;
+		return this;
+	}
+
 	/**
 	 * Annotate a previously registered route with OpenAPI schema metadata.
 	 *
