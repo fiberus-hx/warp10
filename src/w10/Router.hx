@@ -28,6 +28,9 @@ import w10.types.HttpMethod;
 class Router {
 	var root:RouterNode;
 
+	/** Optional handler run when no route matches (e.g. SPA fallback). */
+	public var notFoundHandler:Null<RouteHandler> = null;
+
 	public function new() {
 		root = new RouterNode();
 	}
