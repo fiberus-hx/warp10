@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Scheduler profile: servers park for batched CQE reaping (override with
+# FIBERUS_PROFILE=latency for A/B against the game-tuned idle behavior)
+export FIBERUS_PROFILE=${FIBERUS_PROFILE:-server}
 # wrk_soak.sh — Phase 4 soak gate.
 #
 # Runs the server under sustained load for ${SOAK_DURATION:-1800} seconds
