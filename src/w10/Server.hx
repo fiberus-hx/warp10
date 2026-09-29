@@ -203,7 +203,9 @@ class Server {
 				return;
 			}
 
-			var keepAlive = req.isKeepAlive();
+			// The last request this connection may serve says so (Connection: close), so clients
+			// reconnect instead of failing their next request on a socket we are about to close.
+			var keepAlive = req.isKeepAlive() && requestCount + 1 < maxRequestsPerConn;
 
 			// --- 2. Create Context ---
 			var res = new Response(clientFd);

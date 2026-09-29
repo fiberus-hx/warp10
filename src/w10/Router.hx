@@ -53,8 +53,12 @@ class Router {
 				// Parametric segment
 				if (node.paramChild == null) {
 					node.paramChild = new RouterNode();
+					node.paramChild.paramName = segment.substr(1);
+				} else if (node.paramChild.paramName != segment.substr(1)) {
+					// One param node per position: a second name would silently rename the first
+					// route's param (its handler then reads null). Fail at registration instead.
+					throw 'route $path: param ":${segment.substr(1)}" conflicts with ":${node.paramChild.paramName}" at the same position';
 				}
-				node.paramChild.paramName = segment.substr(1);
 				node = node.paramChild;
 			} else if (segment == "*") {
 				// Wildcard segment (must be last)
