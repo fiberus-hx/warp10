@@ -23,6 +23,9 @@ typedef ServerConfig = {
 	/** Max header size in bytes (default: 8192) */
 	?maxHeaderSize:Int,
 
+	/** Max size of a `Transfer-Encoding: chunked` request body in bytes (default: 256 MiB); larger bodies close the connection */
+	?maxBodySize:Int,
+
 	/** Receive buffer size (default: 4096) */
 	?recvBufferSize:Int,
 

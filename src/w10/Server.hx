@@ -37,6 +37,7 @@ class Server {
 	// Resolved config values with defaults applied
 	var acceptThreads:Int;
 	var maxHeaderSize:Int;
+	var maxBodySize:Int;
 	var recvBufSize:Int;
 	var keepAliveTimeout:Int;
 	var maxRequestsPerConn:Int;
@@ -50,6 +51,7 @@ class Server {
 		// Apply defaults
 		acceptThreads = this.config.acceptThreads != null ? this.config.acceptThreads : 4;
 		maxHeaderSize = this.config.maxHeaderSize != null ? this.config.maxHeaderSize : 8192;
+		maxBodySize = this.config.maxBodySize != null ? this.config.maxBodySize : 256 * 1024 * 1024;
 		recvBufSize = this.config.recvBufferSize != null ? this.config.recvBufferSize : 4096;
 		keepAliveTimeout = this.config.keepAliveTimeout != null ? this.config.keepAliveTimeout : 15000;
 		maxRequestsPerConn = this.config.maxRequestsPerConnection != null ? this.config.maxRequestsPerConnection : 1000;
@@ -405,9 +407,9 @@ class Server {
 
 		// Read body if Content-Length is present
 		var contentLength = req.contentLength();
+		var bodyStart = headerEnd + 4; // skip \r\n\r\n
 		if (contentLength > 0) {
 			var bodyBuf = Bytes.alloc(contentLength);
-			var bodyStart = headerEnd + 4; // skip \r\n\r\n
 			var bodyInHeader = totalRead - bodyStart; // bytes already read past headers
 
 			if (bodyInHeader > 0) {
@@ -437,9 +439,54 @@ class Server {
 			}
 
 			req.body = bodyBuf;
+		} else {
+			// Transfer-Encoding: chunked (a git push over 1 MiB, streaming clients): decode into one body
+			var te = req.getHeader("transfer-encoding");
+			if (te != null && te.toLowerCase().indexOf("chunked") >= 0) {
+				var body = readChunkedBody(clientFd, headerBuf, bodyStart, totalRead);
+				if (body == null)
+					return null;
+				req.body = body;
+				req.headers.set("content-length", Std.string(body.length)); // handlers read one length, whatever the framing was
+				req.headers.remove("transfer-encoding");
+			}
 		}
 
 		return req;
+	}
+
+	/**
+	 * Decode a `Transfer-Encoding: chunked` request body (RFC 9112 §7.1): a hex size line per chunk, the
+	 * chunk, CRLF, until a zero-size chunk; trailer lines up to an empty line are skipped. `pre` holds the
+	 * bytes already received with the headers. Returns null on EOF, a malformed stream, or a body over
+	 * maxBodySize (the caller closes the connection).
+	 */
+	function readChunkedBody(clientFd:Int, pre:Bytes, preStart:Int, preEnd:Int):Null<Bytes> {
+		var r = new ChunkedReader(clientFd, preEnd > preStart ? pre.sub(preStart, preEnd - preStart) : Bytes.alloc(0), recvBufSize);
+		var out = new haxe.io.BytesBuffer();
+		while (true) {
+			var line:Null<String> = r.readLine();
+			if (line == null)
+				return null;
+			var semi:Int = line.indexOf(";"); // chunk extensions are ignored
+			var size:Null<Int> = Std.parseInt("0x" + StringTools.trim(semi >= 0 ? line.substr(0, semi) : line));
+			if (size == null || size < 0)
+				return null;
+			if (size == 0)
+				break;
+			if (out.length + size > maxBodySize)
+				return null;
+			if (!r.readChunk(size, out))
+				return null;
+		}
+		while (true) {
+			var trailer:Null<String> = r.readLine();
+			if (trailer == null)
+				return null;
+			if (trailer == "")
+				break;
+		}
+		return out.getBytes();
 	}
 
 	/**
@@ -453,5 +500,79 @@ class Server {
 		res.keepAlive = keepAlive;
 		res.status(statusCode).header("Content-Type", "application/json; charset=UTF-8");
 		res.send(Bytes.ofString(body));
+	}
+}
+
+/**
+ * The byte source of a chunked request body: the unconsumed tail received with the headers, refilled
+ * from the socket. Size lines and CRLFs come from the tail; a chunk's payload streams straight into the body.
+ * A class, not closures: captured mutable locals are not for the fiberus target.
+ */
+private class ChunkedReader {
+	var fd:Int;
+	var data:Bytes;
+	var pos:Int = 0;
+	var recvSize:Int;
+
+	public function new(fd:Int, tail:Bytes, recvSize:Int) {
+		this.fd = fd;
+		this.data = tail;
+		this.recvSize = recvSize;
+	}
+
+	function more():Bool {
+		var chunk:Bytes = Bytes.alloc(recvSize);
+		var n:Int = FD.recv(fd, chunk, 0, chunk.length, 0);
+		if (n <= 0)
+			return false;
+		var b = new haxe.io.BytesBuffer();
+		b.addBytes(data, pos, data.length - pos);
+		b.addBytes(chunk, 0, n);
+		data = b.getBytes();
+		pos = 0;
+		return true;
+	}
+
+	/** One CRLF-terminated line, without the CRLF; null on EOF. */
+	public function readLine():Null<String> {
+		while (true) {
+			var i:Int = pos;
+			while (i + 1 < data.length && !(data.get(i) == 13 && data.get(i + 1) == 10))
+				i++;
+			if (i + 1 < data.length) {
+				var s:String = data.getString(pos, i - pos);
+				pos = i + 2;
+				return s;
+			}
+			if (!more())
+				return null;
+		}
+	}
+
+	/** `size` payload bytes into `out`, then the chunk's CRLF; false on EOF or a missing CRLF. */
+	public function readChunk(size:Int, out:haxe.io.BytesBuffer):Bool {
+		var remaining:Int = size;
+		var have:Int = data.length - pos;
+		var take:Int = have < remaining ? have : remaining;
+		if (take > 0) {
+			out.addBytes(data, pos, take);
+			pos += take;
+			remaining -= take;
+		}
+		while (remaining > 0) {
+			var buf:Bytes = Bytes.alloc(remaining < 65536 ? remaining : 65536);
+			var n:Int = FD.recv(fd, buf, 0, buf.length, 0);
+			if (n <= 0)
+				return false;
+			out.addBytes(buf, 0, n);
+			remaining -= n;
+		}
+		while (data.length - pos < 2)
+			if (!more())
+				return false;
+		if (!(data.get(pos) == 13 && data.get(pos + 1) == 10))
+			return false;
+		pos += 2;
+		return true;
 	}
 }
