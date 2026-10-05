@@ -16,10 +16,10 @@ import w10.types.Hook;
  * before it's written to the socket.
  *
  * Supported encodings (priority order):
- *   1. deflate  -- zlib-format via haxe.zip.Compress (backed by miniz)
+ *   1. gzip     -- the same deflate stream in a gzip wrapper (runtime fib_compress_gzip)
+ *   2. deflate  -- zlib-format via haxe.zip.Compress (backed by miniz)
  *
- * Gzip and brotli are not currently supported by the fiberus runtime.
- * Deflate is universally supported by all browsers and HTTP clients.
+ * Brotli is not supported. A client that offers neither gets the body as is.
  *
  * Usage:
  *
@@ -41,7 +41,7 @@ import w10.types.Hook;
  *   - Response already has a Content-Encoding header
  *
  * The plugin sets these response headers when compressing:
- *   - Content-Encoding: deflate
+ *   - Content-Encoding: gzip | deflate
  *   - Vary: Accept-Encoding
  */
 class Compress {
@@ -92,6 +92,7 @@ class Compress {
 	 * Returns the best supported encoding name, or null if none match.
 	 */
 	static function negotiateEncoding(header:String):Null<String> {
+		var hasGzip = false;
 		var hasDeflate = false;
 		var hasStar = false;
 		var identityExcluded = false;
@@ -124,15 +125,17 @@ class Compress {
 				continue;
 			}
 
+			if (name == "gzip" || name == "x-gzip") hasGzip = true;
 			if (name == "deflate") hasDeflate = true;
 			if (name == "*") hasStar = true;
 		}
 
-		// Prefer deflate (our only supported encoding)
+		// gzip first: what most clients (curl, load generators, proxies) ask for; same deflate inside
+		if (hasGzip) return "gzip";
 		if (hasDeflate) return "deflate";
 
-		// Wildcard means "any encoding" -- use deflate
-		if (hasStar) return "deflate";
+		// Wildcard means "any encoding" -- use gzip
+		if (hasStar) return "gzip";
 
 		return null;
 	}
@@ -157,7 +160,8 @@ class Compress {
 		if (!isCompressibleResponse(res)) return body;
 
 		// Compress
-		var compressed = haxe.zip.Compress.run(body, level);
+		var compressed = encoding == "gzip" ? gzip(body, level) : haxe.zip.Compress.run(body, level);
+		if (compressed == null) return body;
 
 		// Skip if compression didn't help (rare, but possible for small payloads)
 		if (compressed.length >= body.length) return body;
@@ -166,6 +170,11 @@ class Compress {
 		res.header("Content-Encoding", encoding);
 
 		return compressed;
+	}
+
+	static function gzip(body:Bytes, level:Int):Null<Bytes> {
+		var data:haxe.io.BytesData = untyped __fiberus__("fib_compress_gzip(", body.getData(), ", ", body.length, ", ", level, ")");
+		return data == null ? null : Bytes.ofData(data);
 	}
 
 	/**
