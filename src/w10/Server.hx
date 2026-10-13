@@ -176,26 +176,30 @@ class Server {
 		FD.setsockopt(clientFd, OpenFlags.IPPROTO_TCP, OpenFlags.TCP_NODELAY, 1);
 
 		var requestCount = 0;
+		var conn = new ConnBuffer(maxHeaderSize);
 
 		while (requestCount < maxRequestsPerConn) {
-			// Wait for data with timeout (fiber-suspending via io_uring POLL_ADD)
-			var timeout = (requestCount == 0) ? 5000 : keepAliveTimeout;
-			var pollResult = FD.poll(clientFd, OpenFlags.POLLIN, timeout);
+			// Wait for data with timeout (fiber-suspending via io_uring POLL_ADD),
+			// unless a pipelined request is already buffered
+			if (conn.len == 0) {
+				var timeout = (requestCount == 0) ? 5000 : keepAliveTimeout;
+				var pollResult = FD.poll(clientFd, OpenFlags.POLLIN, timeout);
 
-			if (pollResult <= 0) {
-				// Timeout or error
-				FD.close(clientFd);
-				return;
-			}
+				if (pollResult <= 0) {
+					// Timeout or error
+					FD.close(clientFd);
+					return;
+				}
 
-			// Check for hangup/error events
-			if ((pollResult & OpenFlags.POLLERR) != 0 || (pollResult & OpenFlags.POLLHUP) != 0) {
-				FD.close(clientFd);
-				return;
+				// Check for hangup/error events
+				if ((pollResult & OpenFlags.POLLERR) != 0 || (pollResult & OpenFlags.POLLHUP) != 0) {
+					FD.close(clientFd);
+					return;
+				}
 			}
 
 			// --- 1. Parse the HTTP request ---
-			var req = parseRequest(clientFd, clientIp, clientPort);
+			var req = parseRequest(clientFd, clientIp, clientPort, conn);
 			if (req == null) {
 				if (logger != null) {
 					logger.debug("request parse failed", {ip: clientIp, statusCode: 400});
@@ -322,15 +326,16 @@ class Server {
 	 *
 	 * Reads headers (up to maxHeaderSize), parses the request line and
 	 * headers, then reads the body if Content-Length is present.
+	 * Bytes past the request stay in `conn` for the next (pipelined) request.
 	 * Returns null on parse error or connection close.
 	 */
-	function parseRequest(clientFd:Int, clientIp:String, clientPort:Int):Null<Request> {
-		// Read headers until \r\n\r\n terminator
-		var headerBuf = Bytes.alloc(maxHeaderSize);
-		var totalRead = 0;
-		var headerEnd = -1; // index where \r\n\r\n starts
+	function parseRequest(clientFd:Int, clientIp:String, clientPort:Int, conn:ConnBuffer):Null<Request> {
+		// Read headers until \r\n\r\n terminator; a pipelined request may already be buffered
+		var headerBuf = conn.buf;
+		var totalRead = conn.len;
+		var headerEnd = Http.findCrlfCrlf(headerBuf, 0, totalRead); // index where \r\n\r\n starts
 
-		while (totalRead < maxHeaderSize) {
+		while (headerEnd < 0 && totalRead < maxHeaderSize) {
 			var space = maxHeaderSize - totalRead;
 			if (space <= 0)
 				break;
@@ -346,11 +351,12 @@ class Server {
 			if (checkStart < 0)
 				checkStart = 0;
 
-			headerEnd = Http.findCrlfCrlf(headerBuf, checkStart);
+			headerEnd = Http.findCrlfCrlf(headerBuf, checkStart, totalRead);
 
 			if (headerEnd >= 0)
 				break;
 		}
+		conn.len = totalRead;
 
 		if (headerEnd < 0)
 			return null; // Headers too large or malformed
@@ -418,6 +424,7 @@ class Server {
 				if (toCopy > contentLength)
 					toCopy = contentLength;
 				bodyBuf.blit(0, headerBuf, bodyStart, toCopy);
+				conn.consume(bodyStart + toCopy);
 
 				// Read remaining body bytes
 				var bodyRead = toCopy;
@@ -429,6 +436,7 @@ class Server {
 				}
 			} else {
 				// Read full body
+				conn.consume(bodyStart);
 				var bodyRead = 0;
 				while (bodyRead < contentLength) {
 					var n = FD.recv(clientFd, bodyBuf, bodyRead, contentLength - bodyRead, 0);
@@ -443,12 +451,14 @@ class Server {
 			// Transfer-Encoding: chunked (a git push over 1 MiB, streaming clients): decode into one body
 			var te = req.getHeader("transfer-encoding");
 			if (te != null && te.toLowerCase().indexOf("chunked") >= 0) {
-				var body = readChunkedBody(clientFd, headerBuf, bodyStart, totalRead);
+				var body = readChunkedBody(clientFd, conn, bodyStart);
 				if (body == null)
 					return null;
 				req.body = body;
 				req.headers.set("content-length", Std.string(body.length)); // handlers read one length, whatever the framing was
 				req.headers.remove("transfer-encoding");
+			} else {
+				conn.consume(bodyStart);
 			}
 		}
 
@@ -457,12 +467,13 @@ class Server {
 
 	/**
 	 * Decode a `Transfer-Encoding: chunked` request body (RFC 9112 §7.1): a hex size line per chunk, the
-	 * chunk, CRLF, until a zero-size chunk; trailer lines up to an empty line are skipped. `pre` holds the
-	 * bytes already received with the headers. Returns null on EOF, a malformed stream, or a body over
-	 * maxBodySize (the caller closes the connection).
+	 * chunk, CRLF, until a zero-size chunk; trailer lines up to an empty line are skipped. `conn` holds the
+	 * bytes already received with the headers from `bodyStart`; bytes read past the body go back into it.
+	 * Returns null on EOF, a malformed stream, or a body over maxBodySize (the caller closes the connection).
 	 */
-	function readChunkedBody(clientFd:Int, pre:Bytes, preStart:Int, preEnd:Int):Null<Bytes> {
-		var r = new ChunkedReader(clientFd, preEnd > preStart ? pre.sub(preStart, preEnd - preStart) : Bytes.alloc(0), recvBufSize);
+	function readChunkedBody(clientFd:Int, conn:ConnBuffer, bodyStart:Int):Null<Bytes> {
+		var r = new ChunkedReader(clientFd, conn.len > bodyStart ? conn.buf.sub(bodyStart, conn.len - bodyStart) : Bytes.alloc(0), recvBufSize);
+		conn.len = 0;
 		var out = new haxe.io.BytesBuffer();
 		while (true) {
 			var line:Null<String> = r.readLine();
@@ -486,6 +497,12 @@ class Server {
 			if (trailer == "")
 				break;
 		}
+		// Bytes past the body are the next pipelined request
+		var rest = r.rest();
+		if (rest.length > conn.buf.length)
+			return null;
+		conn.buf.blit(0, rest, 0, rest.length);
+		conn.len = rest.length;
 		return out.getBytes();
 	}
 
@@ -533,6 +550,10 @@ private class ChunkedReader {
 		return true;
 	}
 
+	/** The received bytes not consumed yet. */
+	public function rest():Bytes
+		return data.sub(pos, data.length - pos);
+
 	/** One CRLF-terminated line, without the CRLF; null on EOF. */
 	public function readLine():Null<String> {
 		while (true) {
@@ -574,5 +595,24 @@ private class ChunkedReader {
 			return false;
 		pos += 2;
 		return true;
+	}
+}
+
+/**
+ * Bytes received on a connection and not consumed yet: `buf[0..len)`. Pipelined
+ * requests arrive together, so what one request leaves here is the next one's start.
+ */
+private class ConnBuffer {
+	public var buf:Bytes;
+	public var len:Int = 0;
+
+	public function new(size:Int) {
+		buf = Bytes.alloc(size);
+	}
+
+	/** Drop the first `n` bytes and keep the rest. */
+	public function consume(n:Int):Void {
+		buf.blit(0, buf, n, len - n);
+		len -= n;
 	}
 }

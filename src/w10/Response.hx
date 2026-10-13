@@ -355,6 +355,8 @@ class Response {
 			s = s + headerKeys[i] + ": " + headerValues[i] + "\r\n";
 			i++;
 		}
+		if (!hasHeader("Date"))
+			s = s + "Date: " + w10.utils.Http.httpDate() + "\r\n";
 
 		s = s + "\r\n";
 		return s;

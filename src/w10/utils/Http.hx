@@ -10,6 +10,29 @@ import haxe.io.Bytes;
  * and byte-level scanning for the double-CRLF header terminator.
  */
 class Http {
+	static final DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+	static final MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+	static var dateSecond:Float = -1;
+	static var dateValue:String = "";
+
+	/**
+	 * The current time as an HTTP `Date` value (RFC 9110 IMF-fixdate), rebuilt at most once per second.
+	 * Racing carriers may both rebuild it; each writes a valid value.
+	 */
+	public static function httpDate():String {
+		var now = Math.ffloor(Sys.time());
+		if (now != dateSecond) {
+			var d = Date.fromTime(now * 1000);
+			dateValue = DAYS[d.getUTCDay()] + ", " + pad2(d.getUTCDate()) + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear() + " "
+				+ pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes()) + ":" + pad2(d.getUTCSeconds()) + " GMT";
+			dateSecond = now;
+		}
+		return dateValue;
+	}
+
+	static inline function pad2(v:Int):String
+		return v < 10 ? "0" + v : "" + v;
+
 	/**
 	 * Parse HTTP-style headers from a string block into a Map.
 	 *
@@ -74,10 +97,11 @@ class Http {
 	 *
 	 * @param buf       The byte buffer to scan
 	 * @param startPos  Position to start scanning from
+	 * @param endPos    End of the valid bytes (default: buf.length)
 	 * @return The position of the first `\r`, or -1 if not found
 	 */
-	public static function findCrlfCrlf(buf:Bytes, startPos:Int):Int {
-		var len = buf.length;
+	public static function findCrlfCrlf(buf:Bytes, startPos:Int, ?endPos:Int):Int {
+		var len = endPos != null ? endPos : buf.length;
 		var pos = startPos;
 		while (pos <= len - 4) {
 			if (buf.get(pos) == 13 && buf.get(pos + 1) == 10 && buf.get(pos + 2) == 13 && buf.get(pos + 3) == 10) {
