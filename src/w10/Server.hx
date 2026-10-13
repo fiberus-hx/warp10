@@ -17,7 +17,7 @@ import w10.utils.Http;
  * Architecture (same proven model as the Fiberus HTTP benchmark):
  * - Multiple parallel accept loops with SO_REUSEPORT
  * - Kernel distributes connections across accept threads
- * - One fiber per connection via Fiber.spawnAny()
+ * - One fiber per connection via Fiber.spawn() on the accepting carrier
  * - All I/O (accept, recv, send) suspends fibers via io_uring
  * - HTTP/1.1 keep-alive by default
  *
@@ -146,7 +146,8 @@ class Server {
 			var clientPort = acceptResult.port;
 			acceptResult = null;  // drop GCFrame slot before spawn — prevents per-accept retention leak (see project_acceptresult_leak memory; 45 GB in 30 min soak)
 
-			Fiber.spawnAny((_) -> handleConnection(clientFd, clientIp, clientPort));
+			// Spawn on this carrier: SO_REUSEPORT already spreads connections across the accept loops.
+			Fiber.spawn((_) -> handleConnection(clientFd, clientIp, clientPort));
 		}
 	}
 
